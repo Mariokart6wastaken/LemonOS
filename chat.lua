@@ -286,13 +286,11 @@ if sCommand == "host" then
     closeModem()
 
 elseif sCommand == "join" then
-    -- "chat join"
-    -- Get hostname and username
-  local sHostname = tArgs[2]
-local sUsername = tArgs[3]
+    -- Always connect to the "global" host
+    local sHostname = "global"
 
--- Load saved username if not provided
-if not sUsername then
+    -- Get username from saved file or prompt
+    local sUsername
     if fs.exists("chat_username.txt") then
         local f = fs.open("chat_username.txt", "r")
         sUsername = f.readAll()
@@ -300,16 +298,12 @@ if not sUsername then
         sUsername = sUsername:gsub("%s+$", "") -- trim
         print("Using saved username: " .. sUsername)
     else
-        printUsage()
-        return
+        write("Enter your username: ")
+        sUsername = read()
+        local f = fs.open("chat_username.txt", "w")
+        f.write(sUsername)
+        f.close()
     end
-else
-    -- Save new username for next time
-    local f = fs.open("chat_username.txt", "w")
-    f.write(sUsername)
-    f.close()
-end
-
 
     -- Connect
     if not openModem() then
@@ -372,12 +366,10 @@ end
         term.redirect(historyWindow)
         print()
         if string.match(sMessage, "^%*") then
-            -- Information
             term.setTextColour(highlightColour)
             write(sMessage)
             term.setTextColour(textColour)
         else
-            -- Chat
             local sUsernameBit = string.match(sMessage, "^<[^>]*>")
             if sUsernameBit then
                 term.setTextColour(highlightColour)
@@ -407,13 +399,11 @@ end
                             ping()
                         end
                     end
-
                 elseif sEvent == "term_resize" then
                     local w, h = parentTerm.getSize()
                     titleWindow.reposition(1, 1, w, 1)
                     historyWindow.reposition(1, 2, w, h - 2)
                     promptWindow.reposition(1, h, w, 1)
-
                 end
             end
         end,
@@ -426,19 +416,15 @@ end
                         if sText then
                             printMessage(sText)
                         end
-
                     elseif tMessage.sType == "ping to client" then
                         rednet.send(nSenderID, {
                             sType = "pong to server",
                             nUserID = nUserID,
                         }, "chat")
-
                     elseif tMessage.sType == "pong to client" then
                         bPingPonged = true
-
                     elseif tMessage.sType == "kick" then
                         return
-
                     end
                 end
             end
@@ -467,10 +453,7 @@ end
         end
     )
 
-    -- Close the windows
     term.redirect(parentTerm)
-
-    -- Print error notice
     local _, h = term.getSize()
     term.setCursorPos(1, h)
     term.clearLine()
@@ -485,12 +468,4 @@ end
         nUserID = nUserID,
     }, "chat")
     closeModem()
-
-    -- Print disconnection notice
     print("Disconnected.")
-
-else
-    -- "chat somethingelse"
-    printUsage()
-
-end
