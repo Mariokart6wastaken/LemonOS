@@ -469,3 +469,4 @@ elseif sCommand == "join" then
     }, "chat")
     closeModem()
     print("Disconnected.")
+end
