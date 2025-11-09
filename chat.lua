@@ -1,10 +1,10 @@
--- SPDX-FileCopyrightText: 2017 Daniel Ratcliffe
---
--- SPDX-License-Identifier: LicenseRef-CCPL
+-- Lemonphone Chat (modified chat.lua)
+-- Original by Daniel Ratcliffe, modified for persistent Lemonphone client
+-- Features: logging (-log), saved username, global host, auto startup, labeling
 
 local tArgs = { ... }
 
--- Logging feature
+-- ===== Logging Support =====
 local bLogging = false
 for i = 1, #tArgs do
     if tArgs[i] == "-log" then
@@ -45,21 +45,23 @@ if bLogging then
     print("Logging enabled. Output will be written to chat_log.txt")
 end
 
+-- ===== Clear screen before running =====
+term.clear()
+term.setCursorPos(1,1)
 
+-- ===== Utility functions =====
 local function printUsage()
     local programName = arg[0] or fs.getName(shell.getRunningProgram())
     print("Usages:")
     print(programName .. " host <hostname>")
-    print(programName .. " join <hostname> <nickname>")
+    print(programName .. " join")
 end
 
-local sOpenedModem = nil
 local function openModem()
     for _, sModem in ipairs(peripheral.getNames()) do
         if peripheral.getType(sModem) == "modem" then
             if not rednet.isOpen(sModem) then
                 rednet.open(sModem)
-                sOpenedModem = sModem
             end
             return true
         end
@@ -69,13 +71,16 @@ local function openModem()
 end
 
 local function closeModem()
-    if sOpenedModem ~= nil then
-        rednet.close(sOpenedModem)
-        sOpenedModem = nil
+    for _, sModem in ipairs(peripheral.getNames()) do
+        if peripheral.getType(sModem) == "modem" then
+            if rednet.isOpen(sModem) then
+                rednet.close(sModem)
+            end
+        end
     end
 end
 
--- Colours
+-- ===== Colours =====
 local highlightColour, textColour
 if term.isColour() then
     textColour = colours.white
@@ -85,25 +90,27 @@ else
     highlightColour = colours.white
 end
 
+-- ===== Command parsing =====
 local sCommand = tArgs[1]
+
 if sCommand == "host" then
-    -- "chat host"
-    -- Get hostname
+    --------------------------------------------------------
+    -- HOST MODE
+    --------------------------------------------------------
     local sHostname = tArgs[2]
     if sHostname == nil then
         printUsage()
         return
     end
 
-    -- Host server
-    if not openModem() then
-        return
-    end
+    if not openModem() then return end
     rednet.host("chat", sHostname)
+    print("Hosting chat server '" .. sHostname .. "'")
     print("0 users connected.")
 
     local tUsers = {}
     local nUsers = 0
+
     local function send(sText, nUserID)
         if nUserID then
             local tUser = tUsers[nUserID]
@@ -125,94 +132,44 @@ if sCommand == "host" then
         end
     end
 
-    -- Setup ping pong
     local tPingPongTimer = {}
     local function ping(nUserID)
         local tUser = tUsers[nUserID]
-        rednet.send(tUser.nID, {
-            sType = "ping to client",
-            nUserID = nUserID,
-        }, "chat")
-
+        rednet.send(tUser.nID, { sType = "ping to client", nUserID = nUserID }, "chat")
         local timer = os.startTimer(15)
         tUser.bPingPonged = false
         tPingPongTimer[timer] = nUserID
     end
 
     local function printUsers()
-        local _, y = term.getCursorPos()
-        term.setCursorPos(1, y - 1)
+        term.setCursorPos(1, select(2, term.getCursorPos()) - 1)
         term.clearLine()
-        if nUsers == 1 then
-            print(nUsers .. " user connected.")
-        else
-            print(nUsers .. " users connected.")
-        end
+        print(nUsers .. (nUsers == 1 and " user connected." or " users connected."))
     end
 
-    -- Handle messages
-    local ok, error = pcall(parallel.waitForAny,
+    local ok, err = pcall(parallel.waitForAny,
         function()
             while true do
                 local _, timer = os.pullEvent("timer")
                 local nUserID = tPingPongTimer[timer]
                 if nUserID and tUsers[nUserID] then
                     local tUser = tUsers[nUserID]
-                    if tUser then
-                        if not tUser.bPingPonged then
-                            send("* " .. tUser.sUsername .. " has timed out")
-                            tUsers[nUserID] = nil
-                            nUsers = nUsers - 1
-                            printUsers()
-                        else
-                            ping(nUserID)
-                        end
+                    if not tUser.bPingPonged then
+                        send("* " .. tUser.sUsername .. " has timed out")
+                        tUsers[nUserID] = nil
+                        nUsers = nUsers - 1
+                        printUsers()
+                    else
+                        ping(nUserID)
                     end
                 end
             end
         end,
         function()
             while true do
-                local tCommands
-                tCommands = {
-                    ["me"] = function(tUser, sContent)
-                        if #sContent > 0 then
-                            send("* " .. tUser.sUsername .. " " .. sContent)
-                        else
-                            send("* Usage: /me [words]", tUser.nUserID)
-                        end
-                    end,
-                    ["nick"] = function(tUser, sContent)
-                        if #sContent > 0 then
-                            local sOldName = tUser.sUsername
-                            tUser.sUsername = sContent
-                            send("* " .. sOldName .. " is now known as " .. tUser.sUsername)
-                        else
-                            send("* Usage: /nick [nickname]", tUser.nUserID)
-                        end
-                    end,
-                    ["users"] = function(tUser, sContent)
-                        send("* Connected Users:", tUser.nUserID)
-                        local sUsers = "*"
-                        for _, tUser in pairs(tUsers) do
-                            sUsers = sUsers .. " " .. tUser.sUsername
-                        end
-                        send(sUsers, tUser.nUserID)
-                    end,
-                    ["help"] = function(tUser, sContent)
-                        send("* Available commands:", tUser.nUserID)
-                        local sCommands = "*"
-                        for sCommand in pairs(tCommands) do
-                            sCommands = sCommands .. " /" .. sCommand
-                        end
-                        send(sCommands .. " /logout", tUser.nUserID)
-                    end,
-                }
-
                 local nSenderID, tMessage = rednet.receive("chat")
                 if type(tMessage) == "table" then
                     if tMessage.sType == "login" then
-                        -- Login from new client
                         local nUserID = tMessage.nUserID
                         local sUsername = tMessage.sUsername
                         if nUserID and sUsername then
@@ -226,76 +183,52 @@ if sCommand == "host" then
                             send("* " .. sUsername .. " has joined the chat")
                             ping(nUserID)
                         end
-
-                    else
-                        -- Something else from existing client
-                        local nUserID = tMessage.nUserID
-                        local tUser = tUsers[nUserID]
-                        if tUser and tUser.nID == nSenderID then
-                            if tMessage.sType == "logout" then
-                                send("* " .. tUser.sUsername .. " has left the chat")
-                                tUsers[nUserID] = nil
-                                nUsers = nUsers - 1
-                                printUsers()
-
-                            elseif tMessage.sType == "chat" then
-                                local sMessage = tMessage.sText
-                                if sMessage then
-                                    local sCommand = string.match(sMessage, "^/([a-z]+)")
-                                    if sCommand then
-                                        local fnCommand = tCommands[sCommand]
-                                        if fnCommand then
-                                            local sContent = string.sub(sMessage, #sCommand + 3)
-                                            fnCommand(tUser, sContent)
-                                        else
-                                            send("* Unrecognised command: /" .. sCommand, tUser.nUserID)
-                                        end
-                                    else
-                                        send("<" .. tUser.sUsername .. "> " .. tMessage.sText)
-                                    end
-                                end
-
-                            elseif tMessage.sType == "ping to server" then
-                                rednet.send(tUser.nID, {
-                                    sType = "pong to client",
-                                    nUserID = nUserID,
-                                }, "chat")
-
-                            elseif tMessage.sType == "pong to server" then
-                                tUser.bPingPonged = true
-
-                            end
+                    elseif tMessage.sType == "logout" then
+                        local tUser = tUsers[tMessage.nUserID]
+                        if tUser then
+                            send("* " .. tUser.sUsername .. " has left the chat")
+                            tUsers[tMessage.nUserID] = nil
+                            nUsers = nUsers - 1
+                            printUsers()
                         end
+                    elseif tMessage.sType == "chat" then
+                        local tUser = tUsers[tMessage.nUserID]
+                        if tUser then
+                            send("<" .. tUser.sUsername .. "> " .. tMessage.sText)
+                        end
+                    elseif tMessage.sType == "ping to server" then
+                        local tUser = tUsers[tMessage.nUserID]
+                        if tUser then
+                            rednet.send(tUser.nID, { sType = "pong to client", nUserID = tMessage.nUserID }, "chat")
+                        end
+                    elseif tMessage.sType == "pong to server" then
+                        local tUser = tUsers[tMessage.nUserID]
+                        if tUser then tUser.bPingPonged = true end
                     end
-                 end
+                end
             end
         end
-   )
-    if not ok then
-        printError(error)
-    end
+    )
 
-    -- Unhost server
-    for nUserID, tUser in pairs(tUsers) do
-        rednet.send(tUser.nID, {
-            sType = "kick",
-            nUserID = nUserID,
-        }, "chat")
+    if not ok then printError(err) end
+    for _, tUser in pairs(tUsers) do
+        rednet.send(tUser.nID, { sType = "kick" }, "chat")
     end
     rednet.unhost("chat")
     closeModem()
 
 elseif sCommand == "join" then
-    -- Always connect to the "global" host
+    --------------------------------------------------------
+    -- CLIENT MODE
+    --------------------------------------------------------
     local sHostname = "global"
-
-    -- Get username from saved file or prompt
     local sUsername
+
+    -- Prompt or load username
     if fs.exists("chat_username.txt") then
         local f = fs.open("chat_username.txt", "r")
-        sUsername = f.readAll()
+        sUsername = f.readAll():gsub("%s+$", "")
         f.close()
-        sUsername = sUsername:gsub("%s+$", "") -- trim
         print("Using saved username: " .. sUsername)
     else
         write("Enter your username: ")
@@ -305,13 +238,19 @@ elseif sCommand == "join" then
         f.close()
     end
 
+    -- Label the computer
+    os.setComputerLabel(sUsername .. "'s Lemonphone")
+
+    -- Create startup.lua for auto-run
+    local startup = fs.open("startup.lua", "w")
+    startup.write('shell.run("netchat join")')
+    startup.close()
+
     -- Connect
-    if not openModem() then
-        return
-    end
+    if not openModem() then return end
     write("Looking up " .. sHostname .. "... ")
     local nHostID = rednet.lookup("chat", sHostname)
-    if nHostID == nil then
+    if not nHostID then
         print("Failed.")
         return
     else
@@ -320,26 +259,18 @@ elseif sCommand == "join" then
 
     -- Login
     local nUserID = math.random(1, 2147483647)
-    rednet.send(nHostID, {
-        sType = "login",
-        nUserID = nUserID,
-        sUsername = sUsername,
-    }, "chat")
+    rednet.send(nHostID, { sType = "login", nUserID = nUserID, sUsername = sUsername }, "chat")
 
-    -- Setup ping pong
+    -- Setup ping/pong
     local bPingPonged = true
     local pingPongTimer = os.startTimer(0)
-
     local function ping()
-        rednet.send(nHostID, {
-            sType = "ping to server",
-            nUserID = nUserID,
-        }, "chat")
+        rednet.send(nHostID, { sType = "ping to server", nUserID = nUserID }, "chat")
         bPingPonged = false
         pingPongTimer = os.startTimer(15)
     end
 
-    -- Handle messages
+    -- Setup chat windows
     local w, h = term.getSize()
     local parentTerm = term.current()
     local titleWindow = window.create(parentTerm, 1, 1, w, 1, true)
@@ -365,17 +296,17 @@ elseif sCommand == "join" then
     local function printMessage(sMessage)
         term.redirect(historyWindow)
         print()
-        if string.match(sMessage, "^%*") then
+        if sMessage:match("^%*") then
             term.setTextColour(highlightColour)
             write(sMessage)
             term.setTextColour(textColour)
         else
-            local sUsernameBit = string.match(sMessage, "^<[^>]*>")
-            if sUsernameBit then
+            local sUser = sMessage:match("^<[^>]*>")
+            if sUser then
                 term.setTextColour(highlightColour)
-                write(sUsernameBit)
+                write(sUser)
                 term.setTextColour(textColour)
-                write(string.sub(sMessage, #sUsernameBit + 1))
+                write(sMessage:sub(#sUser + 1))
             else
                 write(sMessage)
             end
@@ -386,20 +317,18 @@ elseif sCommand == "join" then
 
     drawTitle()
 
-    local ok, error = pcall(parallel.waitForAny,
+    local ok, err = pcall(parallel.waitForAny,
         function()
             while true do
-                local sEvent, timer = os.pullEvent()
-                if sEvent == "timer" then
-                    if timer == pingPongTimer then
-                        if not bPingPonged then
-                            printMessage("Server timeout.")
-                            return
-                        else
-                            ping()
-                        end
+                local ev, timer = os.pullEvent()
+                if ev == "timer" and timer == pingPongTimer then
+                    if not bPingPonged then
+                        printMessage("Server timeout.")
+                        return
+                    else
+                        ping()
                     end
-                elseif sEvent == "term_resize" then
+                elseif ev == "term_resize" then
                     local w, h = parentTerm.getSize()
                     titleWindow.reposition(1, 1, w, 1)
                     historyWindow.reposition(1, 2, w, h - 2)
@@ -412,15 +341,9 @@ elseif sCommand == "join" then
                 local nSenderID, tMessage = rednet.receive("chat")
                 if nSenderID == nHostID and type(tMessage) == "table" and tMessage.nUserID == nUserID then
                     if tMessage.sType == "text" then
-                        local sText = tMessage.sText
-                        if sText then
-                            printMessage(sText)
-                        end
+                        printMessage(tMessage.sText)
                     elseif tMessage.sType == "ping to client" then
-                        rednet.send(nSenderID, {
-                            sType = "pong to server",
-                            nUserID = nUserID,
-                        }, "chat")
+                        rednet.send(nSenderID, { sType = "pong to server", nUserID = nUserID }, "chat")
                     elseif tMessage.sType == "pong to client" then
                         bPingPonged = true
                     elseif tMessage.sType == "kick" then
@@ -437,36 +360,20 @@ elseif sCommand == "join" then
                 promptWindow.setTextColor(highlightColour)
                 promptWindow.write(": ")
                 promptWindow.setTextColor(textColour)
-
                 local sChat = read(nil, tSendHistory)
-                if string.match(sChat, "^/logout") then
-                    break
-                else
-                    rednet.send(nHostID, {
-                        sType = "chat",
-                        nUserID = nUserID,
-                        sText = sChat,
-                    }, "chat")
-                    table.insert(tSendHistory, sChat)
-                end
+                if sChat:match("^/logout") then break end
+                rednet.send(nHostID, { sType = "chat", nUserID = nUserID, sText = sChat }, "chat")
+                table.insert(tSendHistory, sChat)
             end
         end
     )
 
     term.redirect(parentTerm)
-    local _, h = term.getSize()
-    term.setCursorPos(1, h)
-    term.clearLine()
     term.setCursorBlink(false)
-    if not ok then
-        printError(error)
-    end
-
-    -- Logout
-    rednet.send(nHostID, {
-        sType = "logout",
-        nUserID = nUserID,
-    }, "chat")
+    if not ok then printError(err) end
+    rednet.send(nHostID, { sType = "logout", nUserID = nUserID }, "chat")
     closeModem()
     print("Disconnected.")
+else
+    printUsage()
 end
