@@ -288,12 +288,28 @@ if sCommand == "host" then
 elseif sCommand == "join" then
     -- "chat join"
     -- Get hostname and username
-    local sHostname = tArgs[2]
-    local sUsername = tArgs[3]
-    if sHostname == nil or sUsername == nil then
+  local sHostname = tArgs[2]
+local sUsername = tArgs[3]
+
+-- Load saved username if not provided
+if not sUsername then
+    if fs.exists("chat_username.txt") then
+        local f = fs.open("chat_username.txt", "r")
+        sUsername = f.readAll()
+        f.close()
+        sUsername = sUsername:gsub("%s+$", "") -- trim
+        print("Using saved username: " .. sUsername)
+    else
         printUsage()
         return
     end
+else
+    -- Save new username for next time
+    local f = fs.open("chat_username.txt", "w")
+    f.write(sUsername)
+    f.close()
+end
+
 
     -- Connect
     if not openModem() then
